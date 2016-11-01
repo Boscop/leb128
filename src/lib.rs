@@ -19,7 +19,7 @@
 //!
 //! // Read from anything that implements `std::io::Read`.
 //! let mut readable = &buf[..];
-//! let val = leb128::read::signed(&mut readable).expect("Should read number");
+//! let val = leb128::read::signed(&mut readable).expect("Should read number").0;
 //! assert_eq!(val, -12345);
 //! ```
 //!
@@ -36,7 +36,7 @@
 //! }
 //!
 //! let mut readable = &buf[..];
-//! let val = leb128::read::unsigned(&mut readable).expect("Should read number");
+//! let val = leb128::read::unsigned(&mut readable).expect("Should read number").0;
 //! assert_eq!(val, 98765);
 //! ```
 
@@ -109,11 +109,12 @@ pub mod read {
 
     /// Read an unsigned LEB128 number from the given `std::io::Read`able and
     /// return it or an error if reading failed.
-    pub fn unsigned<R>(r: &mut R) -> Result<u64, Error>
+    pub fn unsigned<R>(r: &mut R) -> Result<(u64, usize), Error>
         where R: io::Read
     {
         let mut result = 0;
         let mut shift = 0;
+        let mut bytes_read = 1;
 
         loop {
             let mut buf = [0];
@@ -127,22 +128,24 @@ pub mod read {
             result |= low_bits << shift;
 
             if buf[0] & CONTINUATION_BIT == 0 {
-                return Ok(result);
+                return Ok((result, bytes_read));
             }
 
             shift += 7;
+            bytes_read += 1;
         }
     }
 
     /// Read a signed LEB128 number from the given `std::io::Read`able and
     /// return it or an error if reading failed.
-    pub fn signed<R>(r: &mut R) -> Result<i64, Error>
+    pub fn signed<R>(r: &mut R) -> Result<(i64, usize), Error>
         where R: io::Read
     {
         let mut result = 0;
         let mut shift = 0;
         let size = 64;
         let mut byte;
+        let mut bytes_read = 1;
 
         loop {
             let mut buf = [0];
@@ -160,6 +163,8 @@ pub mod read {
             if byte & CONTINUATION_BIT == 0 {
                 break;
             }
+
+            bytes_read += 1;
         }
 
         if shift < size && (SIGN_BIT & byte) == SIGN_BIT {
@@ -167,7 +172,7 @@ pub mod read {
             result |= !0 << shift;
         }
 
-        Ok(result)
+        Ok((result, bytes_read))
     }
 }
 
@@ -262,32 +267,32 @@ mod tests {
         let buf = [2u8];
         let mut readable = &buf[..];
         assert_eq!(2,
-                   read::unsigned(&mut readable).expect("Should read number"));
+                   read::unsigned(&mut readable).expect("Should read number").0);
 
         let buf = [127u8];
         let mut readable = &buf[..];
         assert_eq!(127,
-                   read::unsigned(&mut readable).expect("Should read number"));
+                   read::unsigned(&mut readable).expect("Should read number").0);
 
         let buf = [CONTINUATION_BIT, 1];
         let mut readable = &buf[..];
         assert_eq!(128,
-                   read::unsigned(&mut readable).expect("Should read number"));
+                   read::unsigned(&mut readable).expect("Should read number").0);
 
         let buf = [1u8 | CONTINUATION_BIT, 1];
         let mut readable = &buf[..];
         assert_eq!(129,
-                   read::unsigned(&mut readable).expect("Should read number"));
+                   read::unsigned(&mut readable).expect("Should read number").0);
 
         let buf = [2u8 | CONTINUATION_BIT, 1];
         let mut readable = &buf[..];
         assert_eq!(130,
-                   read::unsigned(&mut readable).expect("Should read number"));
+                   read::unsigned(&mut readable).expect("Should read number").0);
 
         let buf = [57u8 | CONTINUATION_BIT, 100];
         let mut readable = &buf[..];
         assert_eq!(12857,
-                   read::unsigned(&mut readable).expect("Should read number"));
+                   read::unsigned(&mut readable).expect("Should read number").0);
     }
 
     // Examples from the DWARF 4 standard, section 7.6, figure 23.
@@ -295,41 +300,41 @@ mod tests {
     fn test_read_signed() {
         let buf = [2u8];
         let mut readable = &buf[..];
-        assert_eq!(2, read::signed(&mut readable).expect("Should read number"));
+        assert_eq!(2, read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [0x7eu8];
         let mut readable = &buf[..];
-        assert_eq!(-2, read::signed(&mut readable).expect("Should read number"));
+        assert_eq!(-2, read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [127u8 | CONTINUATION_BIT, 0];
         let mut readable = &buf[..];
         assert_eq!(127,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [1u8 | CONTINUATION_BIT, 0x7f];
         let mut readable = &buf[..];
         assert_eq!(-127,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [CONTINUATION_BIT, 1];
         let mut readable = &buf[..];
         assert_eq!(128,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [CONTINUATION_BIT, 0x7f];
         let mut readable = &buf[..];
         assert_eq!(-128,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [1u8 | CONTINUATION_BIT, 1];
         let mut readable = &buf[..];
         assert_eq!(129,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
 
         let buf = [0x7fu8 | CONTINUATION_BIT, 0x7e];
         let mut readable = &buf[..];
         assert_eq!(-129,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
     }
 
     #[test]
@@ -345,7 +350,7 @@ mod tests {
                    0x40];
         let mut readable = &buf[..];
         assert_eq!(-0x4000000000000000,
-                   read::signed(&mut readable).expect("Should read number"));
+                   read::signed(&mut readable).expect("Should read number").0);
     }
 
     #[test]
@@ -399,7 +404,7 @@ mod tests {
             }
 
             let mut readable = &buf[..];
-            let result = read::signed(&mut readable).expect("Should be able to read it back again");
+            let result = read::signed(&mut readable).expect("Should be able to read it back again").0;
             assert_eq!(i, result);
         }
         for i in -513..513 {
@@ -415,12 +420,12 @@ mod tests {
 
             {
                 let mut writable = &mut buf[..];
-                write::unsigned(&mut writable, i).expect("Should write signed number");
+                write::unsigned(&mut writable, i).expect("Should write unsigned number");
             }
 
             let mut readable = &buf[..];
             let result = read::unsigned(&mut readable)
-                .expect("Should be able to read it back again");
+                .expect("Should be able to read it back again").0;
             assert_eq!(i, result);
         }
     }
@@ -504,9 +509,33 @@ mod tests {
         let buf = [2u8 | CONTINUATION_BIT, 1u8, 1u8];
 
         let mut readable = &buf[..];
-        assert_eq!(read::unsigned(&mut readable).expect("Should read first number"),
+        assert_eq!(read::unsigned(&mut readable).expect("Should read first number").0,
                    130u64);
-        assert_eq!(read::unsigned(&mut readable).expect("Should read first number"),
+        assert_eq!(read::unsigned(&mut readable).expect("Should read first number").0,
                    1u64);
+    }
+
+    #[test]
+    fn test_u64_max() {
+        use std::io::Cursor;
+        let i = 0xffffffffffffffffu64;
+        let mut v = Cursor::new(Vec::<u8>::new());
+        write::unsigned(&mut v, i).expect("Should write unsigned number");
+        assert_eq!(v.get_ref().len(), 10);
+        v.set_position(0);
+        let result = read::unsigned(&mut v).expect("Should be able to read it back again").0;
+        assert_eq!(i, result);
+    }
+
+    #[test]
+    fn test_u32_max() {
+        use std::io::Cursor;
+        let i = 0xffffffffu32;
+        let mut v = Cursor::new(Vec::<u8>::new());
+        write::unsigned(&mut v, i as u64).expect("Should write unsigned number");
+        assert_eq!(v.get_ref().len(), 5);
+        v.set_position(0);
+        let result = read::unsigned(&mut v).expect("Should be able to read it back again").0;
+        assert_eq!(i, result as u32);
     }
 }
